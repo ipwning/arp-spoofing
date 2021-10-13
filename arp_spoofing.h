@@ -37,7 +37,7 @@ typedef struct _arp {
 #define ETH 1
 #define IPV4 0x0800
 
-int get_my_mac(uint8_t *dst);
+int get_my_mac(char *_ifr_name, uint8_t *dst);
 
 int get_my_ip(char *_ifr_name, uint32_t *my_ip);
 

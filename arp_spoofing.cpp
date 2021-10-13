@@ -1,7 +1,7 @@
 
 #include "arp_spoofing.h"
 
-int get_my_mac(uint8_t *dst) {
+int get_my_mac(char *_ifr_name, uint8_t *dst) {
     int nSD; // Socket descriptor
     struct ifreq *ifr; // Interface request
     struct ifconf ifc;
@@ -15,19 +15,19 @@ int get_my_mac(uint8_t *dst) {
     // Create a socket that we can use for all of our ioctls
     nSD = socket( PF_INET, SOCK_DGRAM, 0 );
     
-    if ( nSD < 0 )  return 0;
+    if ( nSD < 0 )  return 1;
     
     if(ioctl(nSD, SIOCGIFCONF, &ifc) < 0) return 0;
     
     if ((ifr = (ifreq*)  malloc(ifc.ifc_len)) == NULL) {
-        return 0;
+        return 1;
     }
 
     else {
         ifc.ifc_ifcu.ifcu_req = ifr;
 
         if (ioctl(nSD, SIOCGIFCONF, &ifc) < 0) {
-            return 0;
+            return 1;
         }
         numif = ifc.ifc_len / sizeof(struct ifreq);
         
@@ -35,20 +35,19 @@ int get_my_mac(uint8_t *dst) {
             r = &ifr[i];
             sin = (struct sockaddr_in *)&r->ifr_addr;
         
-            if (!strcmp(r->ifr_name, "lo"))
-            continue; // skip loopback interface
+            if (strcmp(r->ifr_name, _ifr_name))
+                continue; // skip wrong interface
     
             if(ioctl(nSD, SIOCGIFHWADDR, r) < 0) 
-            return 0;
-            
+                return 1;
             memcpy(dst, r->ifr_hwaddr.sa_data, 6);
-            return 0;
+            break;
         }
     }
     close(nSD);
     free(ifr);
  
-    return( 1 );
+    return 0;
 }
 
 int get_my_ip (char *_ifr_name, uint32_t *my_ip) {
@@ -60,14 +59,13 @@ int get_my_ip (char *_ifr_name, uint32_t *my_ip) {
     strncpy(ifr.ifr_name, _ifr_name, IFNAMSIZ);
 
     if (ioctl(s, SIOCGIFADDR, &ifr) < 0) {
-        return 0;
+        return 1;
     } else {
         inet_ntop(AF_INET, ifr.ifr_addr.sa_data+2,
                 ipstr,sizeof(struct sockaddr));
         *my_ip = inet_addr(ipstr);
-        printf("myOwn IP Address is %s\n", ipstr);
     }
-    return 1;
+    return 0;
 }
 
 uint16_t my_ntohs(uint16_t num) {
@@ -75,9 +73,9 @@ uint16_t my_ntohs(uint16_t num) {
 }
 
 void init_arp(arp* packet) {
-    packet->eth.type = my_ntohs(ARP);
-    packet->h_type = my_ntohs(ETH);
-    packet->p_type = my_ntohs(IPV4);
+    packet->eth.type = ntohs(ARP);
+    packet->h_type = ntohs(ETH);
+    packet->p_type = ntohs(IPV4);
     packet->h_size = 6;
     packet->p_size = 4;
 }
@@ -88,10 +86,9 @@ void set_arp(arp *packet, uint8_t *eth_smac, uint8_t *eth_dmac, uint16_t opcode,
     memcpy(packet->eth.dst_mac, eth_dmac, 6);
     memcpy(packet->sender_mac, smac, 6);
     memcpy(packet->target_mac, dmac, 6);
-    packet->opcode = my_ntohs(opcode);
+    packet->opcode = ntohs(opcode);
     *(uint32_t*)packet->sender_ip = sip;
     *(uint32_t*)packet->target_ip = dip;
-
 }
 
 arp *resolve_target_arp(pcap_t* pcap, pcap_pkthdr** header, const uint8_t **data, arp*send) {
@@ -109,7 +106,7 @@ arp *resolve_target_arp(pcap_t* pcap, pcap_pkthdr** header, const uint8_t **data
         packet = (arp*)*data;
         if(my_ntohs(packet->eth.type)==ARP) {
             if(my_ntohs(packet->opcode)==REPLY) {
-                if (!memcmp(packet->sender_ip, send->target_ip, 4) && !memcmp(packet->target_ip, send->sender_ip, 4) )
+                if (!memcmp(packet->sender_ip, send->target_ip, 4) && !memcmp(packet->target_ip, send->sender_ip, 4) ) 
                     break;
             }
         }
